@@ -1,193 +1,183 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { offices, findNearestOffice, calculateDistance, getWhatsAppLink, type Office } from "@/lib/offices";
 
-type LocationStatus = "loading" | "granted" | "denied" | "prompt" | "unavailable";
+type LocationStatus = "ready" | "prompt" | "denied";
+
+interface CachedLocation {
+    lat: number;
+    lng: number;
+    timestamp: number;
+}
+
+const CACHE_KEY = "tas_user_location";
+const CACHE_DURATION = 30 * 60 * 1000; // 30 minutes
+const LOCATION_TIMEOUT = 5000; // 5 seconds max
 
 export default function NearestBranchBar() {
-    const [nearestOffice, setNearestOffice] = useState<Office | null>(null);
+    const [nearestOffice, setNearestOffice] = useState<Office>(offices[0]);
     const [distance, setDistance] = useState<number | null>(null);
-    const [locationStatus, setLocationStatus] = useState<LocationStatus>("loading");
+    const [hasLocation, setHasLocation] = useState(false);
+    const [locationStatus, setLocationStatus] = useState<LocationStatus>("ready");
     const [isDismissed, setIsDismissed] = useState(false);
 
-    useEffect(() => {
-        // Check if already dismissed in this session
-        const dismissed = sessionStorage.getItem("locationBannerDismissed");
-        if (dismissed) {
-            setIsDismissed(true);
-        }
-
-        // Check if geolocation is available
-        if (!("geolocation" in navigator)) {
-            setLocationStatus("unavailable");
-            setNearestOffice(offices[0]);
-            return;
-        }
-
-        // Check permission status if available
-        if ("permissions" in navigator) {
-            navigator.permissions.query({ name: "geolocation" }).then((result) => {
-                if (result.state === "granted") {
-                    requestLocation();
-                } else if (result.state === "denied") {
-                    setLocationStatus("denied");
-                    setNearestOffice(offices[0]);
-                } else {
-                    setLocationStatus("prompt");
-                    // Show prompt banner, don't request yet
-                }
-
-                // Listen for permission changes
-                result.onchange = () => {
-                    if (result.state === "granted") {
-                        requestLocation();
-                    } else if (result.state === "denied") {
-                        setLocationStatus("denied");
-                        setNearestOffice(offices[0]);
-                    }
-                };
-            }).catch(() => {
-                // Fallback if permissions API fails
-                requestLocation();
-            });
-        } else {
-            // No permissions API, try to request location
-            requestLocation();
+    const updateFromCoords = useCallback((lat: number, lng: number) => {
+        const nearest = findNearestOffice(lat, lng);
+        if (nearest) {
+            setNearestOffice(nearest);
+            setDistance(calculateDistance(lat, lng, nearest.coordinates.lat, nearest.coordinates.lng));
+            setHasLocation(true);
         }
     }, []);
 
-    const requestLocation = () => {
-        setLocationStatus("loading");
-        navigator.geolocation.getCurrentPosition(
-            (position) => {
-                const { latitude, longitude } = position.coords;
-                const nearest = findNearestOffice(latitude, longitude);
-                if (nearest) {
-                    setNearestOffice(nearest);
-                    setDistance(
-                        calculateDistance(
-                            latitude,
-                            longitude,
-                            nearest.coordinates.lat,
-                            nearest.coordinates.lng
-                        )
-                    );
-                    setLocationStatus("granted");
+    const cacheLocation = useCallback((lat: number, lng: number) => {
+        try {
+            const cached: CachedLocation = { lat, lng, timestamp: Date.now() };
+            localStorage.setItem(CACHE_KEY, JSON.stringify(cached));
+        } catch {
+            // localStorage might not be available
+        }
+    }, []);
+
+    const getCachedLocation = useCallback((): CachedLocation | null => {
+        try {
+            const cached = localStorage.getItem(CACHE_KEY);
+            if (cached) {
+                const parsed: CachedLocation = JSON.parse(cached);
+                // Check if cache is still valid
+                if (Date.now() - parsed.timestamp < CACHE_DURATION) {
+                    return parsed;
                 }
-            },
-            (error) => {
-                console.log("Geolocation error:", error.code, error.message);
-                if (error.code === 1) {
-                    // Permission denied
+            }
+        } catch {
+            // localStorage might not be available
+        }
+        return null;
+    }, []);
+
+    useEffect(() => {
+        // Check if dismissed
+        try {
+            if (sessionStorage.getItem("locationBannerDismissed")) {
+                setIsDismissed(true);
+            }
+        } catch {
+            // sessionStorage might not be available
+        }
+
+        // Try cached location first for instant display
+        const cached = getCachedLocation();
+        if (cached) {
+            updateFromCoords(cached.lat, cached.lng);
+        }
+
+        // Check if geolocation available
+        if (!("geolocation" in navigator)) {
+            return;
+        }
+
+        // Check permission state
+        if ("permissions" in navigator) {
+            navigator.permissions.query({ name: "geolocation" }).then((result) => {
+                if (result.state === "granted") {
+                    // Already granted - fetch location
+                    fetchLocation();
+                } else if (result.state === "denied") {
                     setLocationStatus("denied");
                 } else {
-                    // Position unavailable or timeout
-                    setLocationStatus("unavailable");
+                    // Prompt state - only show prompt if no cache
+                    if (!cached) {
+                        setLocationStatus("prompt");
+                    }
                 }
-                setNearestOffice(offices[0]);
+            }).catch(() => {
+                // Permissions API failed, try location directly if we have cache
+                if (cached) {
+                    fetchLocation();
+                }
+            });
+        } else if (cached) {
+            // No permissions API but have cache, refresh in background
+            fetchLocation();
+        }
+    }, [getCachedLocation, updateFromCoords]);
+
+    const fetchLocation = useCallback(() => {
+        // Set a timeout to prevent infinite loading
+        const timeoutId = setTimeout(() => {
+            // If still no location after timeout, keep using default/cache
+            console.log("Location timeout - using fallback");
+        }, LOCATION_TIMEOUT);
+
+        navigator.geolocation.getCurrentPosition(
+            (position) => {
+                clearTimeout(timeoutId);
+                const { latitude, longitude } = position.coords;
+                updateFromCoords(latitude, longitude);
+                cacheLocation(latitude, longitude);
+            },
+            (error) => {
+                clearTimeout(timeoutId);
+                console.log("Geolocation error:", error.code);
+                if (error.code === 1) {
+                    setLocationStatus("denied");
+                }
             },
             {
                 enableHighAccuracy: false,
-                timeout: 10000,
-                maximumAge: 300000, // Cache for 5 minutes
+                timeout: LOCATION_TIMEOUT,
+                maximumAge: CACHE_DURATION,
             }
         );
-    };
+    }, [updateFromCoords, cacheLocation]);
 
     const handleEnableLocation = () => {
-        requestLocation();
+        setLocationStatus("ready");
+        fetchLocation();
     };
 
     const handleDismiss = () => {
         setIsDismissed(true);
-        sessionStorage.setItem("locationBannerDismissed", "true");
+        try {
+            sessionStorage.setItem("locationBannerDismissed", "true");
+        } catch {
+            // sessionStorage might not be available
+        }
     };
 
-    const contact = nearestOffice?.contacts[0];
+    const contact = nearestOffice.contacts[0];
 
     const formatDistance = (km: number) => {
         if (km < 1) return `${Math.round(km * 1000)}m away`;
         return `${km.toFixed(1)}km away`;
     };
 
-    // Don't show anything while loading
-    if (locationStatus === "loading") {
+    // Show prompt banner if location not yet granted
+    if (locationStatus === "prompt" && !isDismissed && !hasLocation) {
         return (
-            <div className="bg-gray-900 text-white py-2 px-4">
-                <div className="max-w-7xl mx-auto flex items-center justify-center gap-2 text-sm">
-                    <div className="w-4 h-4 border-2 border-emerald-400 border-t-transparent rounded-full animate-spin" />
-                    <span className="text-gray-400">Finding nearest branch...</span>
-                </div>
-            </div>
-        );
-    }
-
-    // Show prompt banner if location not yet requested
-    if (locationStatus === "prompt" && !isDismissed) {
-        return (
-            <div className="bg-gradient-to-r from-emerald-600 to-emerald-700 text-white py-2.5 px-4">
-                <div className="max-w-7xl mx-auto flex flex-wrap items-center justify-center gap-x-4 gap-y-2 text-sm">
+            <div className="bg-gradient-to-r from-emerald-600 to-emerald-700 text-white py-2 px-4">
+                <div className="max-w-7xl mx-auto flex flex-wrap items-center justify-center gap-x-3 gap-y-2 text-sm">
                     <div className="flex items-center gap-2">
-                        <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
                         </svg>
-                        <span>Enable location to find your nearest branch</span>
+                        <span className="hidden sm:inline">Enable location to find your nearest branch</span>
+                        <span className="sm:hidden">Find nearest branch</span>
                     </div>
-                    <div className="flex items-center gap-2">
-                        <button
-                            onClick={handleEnableLocation}
-                            className="px-3 py-1 bg-white text-emerald-700 rounded-full text-xs font-semibold hover:bg-emerald-50 transition-colors"
-                        >
-                            Enable Location
-                        </button>
-                        <button
-                            onClick={handleDismiss}
-                            className="p-1 hover:bg-white/20 rounded-full transition-colors"
-                            aria-label="Dismiss"
-                        >
-                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                            </svg>
-                        </button>
-                    </div>
-                </div>
-            </div>
-        );
-    }
-
-    // Show denied banner with fallback
-    if (locationStatus === "denied" && !isDismissed) {
-        return (
-            <div className="bg-gray-900 text-white py-2 px-4">
-                <div className="max-w-7xl mx-auto flex flex-wrap items-center justify-center gap-x-4 gap-y-1 text-sm">
-                    <div className="flex items-center gap-2">
-                        <svg className="w-4 h-4 text-amber-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                        </svg>
-                        <span className="text-gray-300">Location access denied.</span>
-                    </div>
-                    {contact && (
-                        <>
-                            <span className="text-gray-600 hidden sm:inline">|</span>
-                            <div className="flex items-center gap-2">
-                                <span className="text-gray-400">Contact our head office:</span>
-                                <a
-                                    href={`tel:${contact.phone}`}
-                                    className="font-medium text-emerald-400 hover:text-emerald-300 transition-colors"
-                                >
-                                    {contact.phone}
-                                </a>
-                            </div>
-                        </>
-                    )}
+                    <button
+                        onClick={handleEnableLocation}
+                        className="px-3 py-1 bg-white text-emerald-700 rounded-full text-xs font-semibold hover:bg-emerald-50 transition-colors"
+                    >
+                        Enable
+                    </button>
                     <button
                         onClick={handleDismiss}
-                        className="p-1 hover:bg-white/10 rounded-full transition-colors ml-2"
+                        className="p-1 hover:bg-white/20 rounded-full transition-colors"
                         aria-label="Dismiss"
                     >
-                        <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                         </svg>
                     </button>
@@ -196,8 +186,8 @@ export default function NearestBranchBar() {
         );
     }
 
-    // Normal display with branch info (granted or unavailable with fallback)
-    if (!nearestOffice || !contact) return null;
+    // Normal display with branch info
+    if (!contact) return null;
 
     return (
         <div className="bg-gray-900 text-white py-2 px-4">
@@ -209,18 +199,17 @@ export default function NearestBranchBar() {
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
                     </svg>
                     <span className="font-medium">{nearestOffice.name}</span>
-                    {distance && locationStatus === "granted" && (
+                    {distance && hasLocation ? (
                         <span className="text-gray-400 text-xs">({formatDistance(distance)})</span>
-                    )}
-                    {locationStatus !== "granted" && (
+                    ) : (
                         <span className="text-gray-500 text-xs">(Head Office)</span>
                     )}
                 </div>
 
                 <span className="text-gray-600 hidden sm:inline">|</span>
 
-                {/* Contact Person */}
-                <div className="flex items-center gap-2">
+                {/* Contact Person - hide on very small screens */}
+                <div className="hidden xs:flex items-center gap-2">
                     <svg className="w-4 h-4 text-gray-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
                     </svg>
@@ -228,7 +217,7 @@ export default function NearestBranchBar() {
                 </div>
 
                 {/* Phone & WhatsApp */}
-                <div className="flex items-center gap-3">
+                <div className="flex items-center gap-2 sm:gap-3">
                     <a
                         href={`tel:${contact.phone}`}
                         className="flex items-center gap-1.5 hover:text-emerald-400 transition-colors"
@@ -236,7 +225,8 @@ export default function NearestBranchBar() {
                         <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
                         </svg>
-                        <span className="font-medium">{contact.phone}</span>
+                        <span className="font-medium hidden sm:inline">{contact.phone}</span>
+                        <span className="font-medium sm:hidden">Call</span>
                     </a>
 
                     <a
