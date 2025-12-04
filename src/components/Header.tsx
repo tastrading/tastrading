@@ -202,7 +202,7 @@ export default function Header({ brands, categories }: HeaderProps) {
                                 initial={{ opacity: 0, height: 0 }}
                                 animate={{ opacity: 1, height: "auto" }}
                                 exit={{ opacity: 0, height: 0 }}
-                                className="lg:hidden border-t border-gray-100 py-4"
+                                className="lg:hidden border-t border-gray-100 py-4 max-h-[70vh] overflow-y-auto"
                             >
                                 {navItems.map((item) => (
                                     <div key={item.name}>
@@ -214,7 +214,7 @@ export default function Header({ brands, categories }: HeaderProps) {
                                             {item.name}
                                         </Link>
                                         {item.dropdown && (
-                                            <div className="ml-4 border-l-2 border-gray-100">
+                                            <div className="ml-4 border-l-2 border-gray-100 max-h-48 overflow-y-auto">
                                                 {item.dropdown.map((subItem) => (
                                                     <Link
                                                         key={subItem.href}
