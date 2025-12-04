@@ -1,7 +1,9 @@
 import { Metadata } from "next";
+import { Suspense } from "react";
 import prisma from "@/lib/prisma";
 import ProductCard from "@/components/ProductCard";
-import Link from "next/link";
+import ProductFilters from "@/components/ProductFilters";
+import QuickSearch from "@/components/QuickSearch";
 import { siteConfig } from "@/lib/seo";
 
 // Revalidate products page every 5 minutes
@@ -29,14 +31,20 @@ export const metadata: Metadata = {
 };
 
 interface Props {
-    searchParams: Promise<{ brand?: string; category?: string }>;
+    searchParams: Promise<{ brand?: string; category?: string; search?: string }>;
 }
 
-async function getProducts(brandId?: string, categoryId?: string) {
+async function getProducts(brandId?: string, categoryId?: string, searchQuery?: string) {
     const where = {
         isArchived: false,
         ...(brandId && { brandId }),
         ...(categoryId && { categoryId }),
+        ...(searchQuery && {
+            OR: [
+                { name: { contains: searchQuery, mode: "insensitive" as const } },
+                { description: { contains: searchQuery, mode: "insensitive" as const } },
+            ],
+        }),
     };
 
     const [products, brands, categories] = await Promise.all([
@@ -63,105 +71,76 @@ async function getProducts(brandId?: string, categoryId?: string) {
 }
 
 export default async function ProductsPage({ searchParams }: Props) {
-    const { brand, category } = await searchParams;
-    const { products, brands, categories } = await getProducts(brand, category);
+    const { brand, category, search } = await searchParams;
+    const { products, brands, categories } = await getProducts(brand, category, search);
+
+    // Get selected filter names
+    const selectedBrandName = brand ? brands.find((b) => b.id === brand)?.name : undefined;
+    const selectedCategoryName = category ? categories.find((c) => c.id === category)?.name : undefined;
 
     return (
-        <div className="py-16 bg-gray-50 min-h-screen">
+        <div className="py-8 lg:py-16 bg-gray-50 min-h-screen">
             <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
                 {/* Page Header */}
-                <div className="text-center mb-12">
+                <div className="mb-8">
                     <span className="text-emerald-600 font-medium text-sm tracking-wide uppercase">
                         Our Products
                     </span>
-                    <h1 className="mt-3 text-4xl font-bold text-gray-900">All Products</h1>
-                    <p className="mt-4 text-gray-600 max-w-2xl mx-auto">
+                    <h1 className="mt-2 text-3xl lg:text-4xl font-bold text-gray-900">All Products</h1>
+                    <p className="mt-2 text-gray-600">
                         Explore our comprehensive range of premium industrial tools and equipment
                     </p>
                 </div>
 
-                <div className="flex flex-col lg:flex-row gap-8">
-                    {/* Sidebar Filters */}
-                    <aside className="lg:w-64 flex-shrink-0">
-                        <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100 sticky top-24">
-                            <h3 className="font-semibold text-gray-900 mb-4">Filters</h3>
-
-                            {/* Brand Filter */}
-                            <div className="mb-6">
-                                <h4 className="text-sm font-medium text-gray-700 mb-3">Brand</h4>
-                                <div className="space-y-2">
-                                    <Link
-                                        href="/products"
-                                        className={`block px-3 py-2 rounded-lg text-sm transition-colors ${!brand
-                                            ? "bg-emerald-50 text-emerald-700 font-medium"
-                                            : "text-gray-600 hover:bg-gray-50"
-                                            }`}
-                                    >
-                                        All Brands
-                                    </Link>
-                                    {brands.map((b) => (
-                                        <Link
-                                            key={b.id}
-                                            href={`/products?brand=${b.id}${category ? `&category=${category}` : ""}`}
-                                            className={`block px-3 py-2 rounded-lg text-sm transition-colors ${brand === b.id
-                                                ? "bg-emerald-50 text-emerald-700 font-medium"
-                                                : "text-gray-600 hover:bg-gray-50"
-                                                }`}
-                                        >
-                                            {b.name}
-                                        </Link>
-                                    ))}
-                                </div>
+                {/* Search Bar - Full Width */}
+                <div className="mb-6 flex flex-col sm:flex-row sm:items-center gap-4">
+                    <Suspense fallback={
+                        <div className="relative flex-shrink-0 w-full sm:w-64">
+                            <div className="absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none">
+                                <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                                </svg>
                             </div>
-
-                            {/* Category Filter */}
-                            <div>
-                                <h4 className="text-sm font-medium text-gray-700 mb-3">Category</h4>
-                                <div className="space-y-2">
-                                    <Link
-                                        href={`/products${brand ? `?brand=${brand}` : ""}`}
-                                        className={`block px-3 py-2 rounded-lg text-sm transition-colors ${!category
-                                            ? "bg-emerald-50 text-emerald-700 font-medium"
-                                            : "text-gray-600 hover:bg-gray-50"
-                                            }`}
-                                    >
-                                        All Categories
-                                    </Link>
-                                    {categories.map((c) => (
-                                        <Link
-                                            key={c.id}
-                                            href={`/products?${brand ? `brand=${brand}&` : ""}category=${c.id}`}
-                                            className={`block px-3 py-2 rounded-lg text-sm transition-colors ${category === c.id
-                                                ? "bg-emerald-50 text-emerald-700 font-medium"
-                                                : "text-gray-600 hover:bg-gray-50"
-                                                }`}
-                                        >
-                                            {c.name}
-                                        </Link>
-                                    ))}
-                                </div>
-                            </div>
-
-                            {/* Clear Filters */}
-                            {(brand || category) && (
-                                <Link
-                                    href="/products"
-                                    className="mt-6 block w-full text-center py-2 text-sm text-emerald-600 hover:text-emerald-700 font-medium"
-                                >
-                                    Clear All Filters
-                                </Link>
-                            )}
+                            <input
+                                type="text"
+                                disabled
+                                placeholder="Search products..."
+                                className="w-full h-10 pl-10 pr-9 bg-white border border-gray-200 rounded-lg text-sm text-gray-900 placeholder-gray-400 outline-none"
+                            />
                         </div>
-                    </aside>
+                    }>
+                        <QuickSearch placeholder="Search products..." />
+                    </Suspense>
+                    <p className="text-sm text-gray-500 whitespace-nowrap">
+                        {products.length} products{search && <span className="text-emerald-600"> matching &quot;{search}&quot;</span>}
+                    </p>
+                </div>
+
+                {/* Mobile Filter Button + Active Filters */}
+                <ProductFilters
+                    brands={brands}
+                    categories={categories}
+                    selectedBrand={brand}
+                    selectedCategory={category}
+                    selectedBrandName={selectedBrandName}
+                    selectedCategoryName={selectedCategoryName}
+                    isMobileOnly={true}
+                />
+
+                <div className="flex gap-8">
+                    {/* Desktop Sidebar Filters */}
+                    <ProductFilters
+                        brands={brands}
+                        categories={categories}
+                        selectedBrand={brand}
+                        selectedCategory={category}
+                        selectedBrandName={selectedBrandName}
+                        selectedCategoryName={selectedCategoryName}
+                        isDesktopOnly={true}
+                    />
 
                     {/* Products Grid */}
                     <div className="flex-1">
-                        <div className="mb-6 flex items-center justify-between">
-                            <p className="text-gray-600">
-                                Showing <span className="font-medium">{products.length}</span> products
-                            </p>
-                        </div>
-
                         {products.length > 0 ? (
                             <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-6">
                                 {products.map((product) => (
@@ -175,17 +154,14 @@ export default async function ProductsPage({ searchParams }: Props) {
                                 ))}
                             </div>
                         ) : (
-                            <div className="text-center py-20 bg-white rounded-2xl">
-                                <div className="w-20 h-20 mx-auto mb-6 bg-gray-100 rounded-full flex items-center justify-center">
-                                    <svg className="w-10 h-10 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4" />
+                            <div className="text-center py-20 bg-white rounded-2xl border border-gray-100">
+                                <div className="w-16 h-16 mx-auto mb-4 bg-gray-100 rounded-full flex items-center justify-center">
+                                    <svg className="w-8 h-8 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
                                     </svg>
                                 </div>
-                                <h3 className="text-xl font-semibold text-gray-900 mb-2">No products found</h3>
-                                <p className="text-gray-500 mb-4">Try adjusting your filters or check back later.</p>
-                                <Link href="/products" className="text-emerald-600 hover:text-emerald-700 font-medium">
-                                    Clear all filters
-                                </Link>
+                                <h3 className="text-lg font-semibold text-gray-900 mb-1">No products found</h3>
+                                <p className="text-gray-500 text-sm">Try adjusting your search or filters</p>
                             </div>
                         )}
                     </div>

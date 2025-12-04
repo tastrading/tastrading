@@ -2,6 +2,7 @@ import { Metadata } from "next";
 import { notFound } from "next/navigation";
 import prisma from "@/lib/prisma";
 import ProductCard from "@/components/ProductCard";
+import QuickSearch from "@/components/QuickSearch";
 import Link from "next/link";
 
 interface Props {
@@ -98,10 +99,15 @@ export default async function CategoryDetailPage({ params }: Props) {
 
                 {/* Category Header */}
                 <div className="bg-gradient-to-br from-emerald-500 to-emerald-600 rounded-2xl p-8 mb-8 text-white">
-                    <h1 className="text-3xl font-bold">{category.name}</h1>
-                    <p className="mt-2 text-emerald-100">
-                        {category.products.length} Products from {groupedProducts.length} Brands
-                    </p>
+                    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                        <div>
+                            <h1 className="text-3xl font-bold">{category.name}</h1>
+                            <p className="mt-2 text-emerald-100">
+                                {category.products.length} Products from {groupedProducts.length} Brands
+                            </p>
+                        </div>
+                        <QuickSearch placeholder="Search in category..." />
+                    </div>
                 </div>
 
                 {/* Table of Contents */}
